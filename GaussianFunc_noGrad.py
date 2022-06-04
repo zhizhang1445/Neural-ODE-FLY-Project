@@ -1,0 +1,86 @@
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torchvision import transforms
+
+
+class GaussianFunc_noGrad(nn.Module):
+
+  def __init__(self, dim = 2, nhidden_M=8, nhidden_P = 8, n_V = 2, nlayer_M = 1):
+    super(GaussianFunc_noGrad, self).__init__()
+
+    self.n_V = n_V
+    self.ndim = dim
+    self.potential_list = nn.ModuleList([])
+
+    self.th = nn.Tanh() 
+    self.sg = nn.Sigmoid()
+    self.softplus = nn.Softplus(100)
+    self.elu = nn.ELU(inplace = True)
+    self.relu = nn.ReLU(inplace = True)
+
+
+    for i in range(n_V):
+      self.potential_list.append(nn.Linear(dim, nhidden_P))
+      self.potential_list.append(nn.Linear(nhidden_P, nhidden_P, bias = False))
+      self.potential_list.append(nn.Linear(nhidden_P, 1, bias = False))
+
+  def potential(self, num, x, return_all= False):
+    size = 3
+    start = size*num
+    end = size*(num+1)
+    layers_V = self.potential_list[start:end]
+    self.last_layers = layers_V
+
+    out = layers_V[0](x)
+    out = torch.pow(out, 2)
+    out1 = out
+
+    out = layers_V[1](out)
+    out = torch.exp(out)
+    out2 = out
+
+    out = layers_V[-1](out)
+    out3 = out
+
+    if return_all:
+      return out1, out2, out3 
+    else:
+      return out3
+
+  def gradient(self, num, x):
+    f1,f2,f3 = self.potential(num, x, True)
+    layers_V = self.last_layers
+
+    W3 = layers_V[-1].weight.data
+    grad = W3
+
+    W2 = layers_V[1].weight.data
+    f2_prime = f2
+    grad = torch.mm(grad*f2_prime, W2)
+
+    W1 = layers_V[0].weight.data
+    f1_prime = 2*layers_V[0](x)
+    grad = torch.mm(grad*f1_prime, W1)
+    return grad
+
+  def total_grad(self, x):
+    grad = self.gradient(0, x)
+    for i in range(1,self.n_V):
+      grad = grad + self.gradient(i, x)
+    grad = grad/self.n_V
+    return grad
+
+  def total_V(self,x):
+    out = self.potential(0,x)
+    for i in range(1,self.n_V):
+      out = out + self.potential(i,x)
+    out = out/self.n_V
+    return out
+
+  def forward(self, x):
+    grad = self.total_grad(x)
+    out = grad
+    return out
